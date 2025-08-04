@@ -20,6 +20,22 @@ LINKEDIN_PASSWORD = os.getenv("LINKEDIN_PASSWORD")
 SHEET_ID = "YOUR_GOOGLE_SHEET_ID_HERE" 
 WORKSHEET_NAME = "Candidates"
 
+# --- Job & Scoring Configuration ---
+# PASTE THE FULL JOB DESCRIPTION HERE
+JOB_DESCRIPTION = """
+Senior Backend Engineer (Go) - We are looking for a seasoned backend engineer to join our platform team. 
+You will be responsible for designing, developing, and deploying microservices that power our core product. 
+Key requirements include 5+ years of experience with Go (Golang), deep knowledge of Kubernetes and AWS, 
+and a proven track record of building distributed systems.
+"""
+
+# Weights for the final Lead Score calculation. Adjust as needed.
+LEAD_SCORE_WEIGHTS = {
+    'relevance': 0.5,
+    'tenure': 0.3,
+    'activity': 0.2
+}
+
 # Session Management
 SESSION_FILE = "linkedin_session.json"
 
@@ -69,24 +85,29 @@ def scrape_linkedin_profile(page: Page, profile_url: str) -> dict:
     This is a simplified version and may need to be adjusted based on LinkedIn's structure.
     """
     print(f"Scraping profile: {profile_url}")
-    page.goto(profile_url)
+    page.goto(profile_url, wait_until="domcontentloaded")
     human_like_delay(3, 6) # Wait for the page to load fully
 
     # A robust scraper would handle variations in page layout.
     # For this example, we use selectors that are common, but might fail.
     try:
         # Click "See more" on the summary if it exists
-        if page.locator("#about-section button.artdeco-button--secondary").is_visible():
-            page.click("#about-section button.artdeco-button--secondary")
+        about_section = page.locator("section[data-section='about']")
+        if about_section.locator("button:has-text('See more')").is_visible():
+            about_section.locator("button:has-text('See more')").click()
             human_like_delay(1,2)
 
         name = page.locator("h1").first.inner_text()
         current_role = page.locator("div.text-body-medium.break-words").first.inner_text().strip()
         location = page.locator("span.text-body-small.inline.break-words").first.inner_text().strip()
-        summary = page.locator("div.display-flex.ph5.pv3 > div.pv-shared-text-with-see-more > div > span.visually-hidden").first.inner_text()
         
+        # Get summary and the full page text for better analysis
+        summary = about_section.locator("div.display-flex.ph5 > div > div > span.visually-hidden").first.inner_text()
+        full_text = page.locator("main").inner_text()
+
+
         # For skills, we'll just take the top 3 endorsed skills as a sample
-        page.goto(profile_url + "/details/skills/")
+        page.goto(profile_url + "/details/skills/", wait_until="domcontentloaded")
         human_like_delay(3, 5)
         skills_elements = page.locator("div.display-flex.ph5.pv3 > div > div > div > div > span.visually-hidden")
         skills = [skills_elements.nth(i).inner_text() for i in range(min(3, skills_elements.count()))]
@@ -97,7 +118,8 @@ def scrape_linkedin_profile(page: Page, profile_url: str) -> dict:
             "Current Role": current_role,
             "Location": location,
             "Core Skills": ", ".join(skills),
-            "summary": summary
+            "summary": summary,
+            "full_text": full_text # Pass full text for tenure analysis
         }
         print("Successfully scraped basic profile data.")
         return profile_data
@@ -106,6 +128,18 @@ def scrape_linkedin_profile(page: Page, profile_url: str) -> dict:
         print(f"Error scraping profile {profile_url}. The page structure may have changed.")
         print(f"Error: {e}")
         return None
+
+def calculate_lead_score(scores: dict) -> float:
+    """Calculates the final lead score based on weighted inputs."""
+    relevance = scores.get("Relevance Score", 0) or 0
+    tenure = scores.get("Tenure Score", 0) or 0
+    activity = scores.get("Activity Score", 0) or 0
+    
+    w = LEAD_SCORE_WEIGHTS
+    
+    lead_score = (relevance * w['relevance']) + (tenure * w['tenure']) + (activity * w['activity'])
+    
+    return round(lead_score, 2)
 
 
 def run_agent():
@@ -122,6 +156,10 @@ def run_agent():
     if SHEET_ID == "YOUR_GOOGLE_SHEET_ID_HERE":
         print("CRITICAL: Please replace 'YOUR_GOOGLE_SHEET_ID_HERE' in the script with your actual Google Sheet ID.")
         return
+    
+    if "Key requirements include" in JOB_DESCRIPTION:
+        print("INFO: Using the default sample job description. Please update it with your target role.")
+
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False, slow_mo=50)
@@ -153,15 +191,21 @@ def run_agent():
             if not scraped_data:
                 continue # Skip to the next candidate if scraping fails
 
-            # 2. Generate insights with the local LLM
-            llm_insights = llm_handler.generate_candidate_insights(scraped_data)
+            # 2. Generate insights with the local LLM, now with JD context
+            llm_insights = llm_handler.generate_candidate_insights(scraped_data, JOB_DESCRIPTION)
             if not llm_insights:
                 continue # Skip if LLM fails
+            
+            # 3. Calculate the final, weighted Lead Score
+            lead_score = calculate_lead_score(llm_insights)
+            llm_insights["Lead Score"] = lead_score
+            print(f"Calculated final Lead Score: {lead_score}")
 
-            # 3. Combine and save to Google Sheets
+            # 4. Combine and save to Google Sheets
             final_candidate_record = {**scraped_data, **llm_insights}
-            # We don't need the summary in the final sheet
+            # We don't need these internal fields in the final sheet
             del final_candidate_record['summary'] 
+            del final_candidate_record['full_text']
             
             google_sheets_handler.add_candidate_to_sheet(
                 sheet_id=SHEET_ID,
@@ -177,3 +221,4 @@ def run_agent():
 
 if __name__ == "__main__":
     run_agent()
+
