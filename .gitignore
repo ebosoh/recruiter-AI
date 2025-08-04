@@ -1,0 +1,24 @@
+# --- Environment & Credentials ---
+# Ignore local environment variables. Contains LinkedIn credentials.
+.env
+
+# Ignore Google Cloud credentials file.
+credentials.json
+
+# --- Session & Cache ---
+# Ignore Playwright's saved session state. Contains login cookies.
+linkedin_session.json
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- IDE & OS specific ---
+.vscode/
+.idea/
+.DS_Store
+*.swo
+*~
+*.swp
