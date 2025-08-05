@@ -110,7 +110,7 @@ def login_to_linkedin(context: BrowserContext, page: Page):
         print(f"Session state saved to {SESSION_FILE}")
 
 def search_for_candidates(page: Page, job_title: str, location: str, max_candidates: int) -> list[str]:
-    """Searches LinkedIn for candidates and returns a list of their profile URLs."""
+    """Searches LinkedIn for candidates, handles pagination, and returns a list of profile URLs."""
     print(f"Starting search for '{job_title}' in '{location}'...")
     
     search_url = f"https://www.linkedin.com/search/results/people/?keywords={job_title.replace(' ', '%20')}&origin=GLOBAL_SEARCH_HEADER"
@@ -133,12 +133,14 @@ def search_for_candidates(page: Page, job_title: str, location: str, max_candida
     human_like_delay(3, 5)
 
     found_urls = set()
-    for i in range(5):
-        if len(found_urls) >= max_candidates:
-            break
-        print(f"Scrolling... ({i+1}/5)")
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        human_like_delay(2, 4)
+    page_number = 1
+    
+    while len(found_urls) < max_candidates:
+        print(f"\n--- Scraping Search Results Page {page_number} ---")
+        
+        for i in range(3):
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            human_like_delay(2, 4)
         
         links = page.locator(".reusable-search__result-container a.app-aware-link[href*='/in/']").all()
         for link in links:
@@ -149,7 +151,25 @@ def search_for_candidates(page: Page, job_title: str, location: str, max_candida
         
         print(f"Found {len(found_urls)} unique candidates so far...")
 
-    print(f"\nSearch complete. Found {len(found_urls)} candidate URLs.")
+        if len(found_urls) >= max_candidates:
+            print("Reached max candidates limit. Stopping search.")
+            break
+
+        try:
+            next_button = page.locator('button[aria-label="Next"]')
+            if next_button.is_disabled():
+                print("Next button is disabled. Reached the end of search results.")
+                break
+            
+            print("Clicking 'Next' to go to the next page...")
+            next_button.click()
+            page_number += 1
+            human_like_delay(3, 6)
+        except Exception as e:
+            print(f"Could not find or click the 'Next' button. Ending search. Error: {e}")
+            break
+
+    print(f"\nSearch complete. Collected {len(found_urls)} candidate URLs.")
     return list(found_urls)[:max_candidates]
 
 def scrape_linkedin_profile(page: Page, profile_url: str) -> dict:
