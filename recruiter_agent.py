@@ -1,75 +1,15 @@
 import os
 import time
 import random
+import csv
+from urllib.parse import quote
 from playwright.sync_api import sync_playwright, Page, BrowserContext
 from dotenv import load_dotenv
 
 # Import our custom handlers
-import google_sheets_handler
+# import google_sheets_handler
 import llm_handler
-
-# --- Configuration ---
-load_dotenv() # Load environment variables from .env file
-
-# LinkedIn Credentials - Store these in your .env file
-LINKEDIN_EMAIL = os.getenv("LINKEDIN_EMAIL")
-LINKEDIN_PASSWORD = os.getenv("LINKEDIN_PASSWORD")
-
-# Google Sheet Configuration
-SHEET_ID = "1Iezquet-B6_3t2bFTfcyWi_4WZrmUq7IAa53cddn_-Q" 
-WORKSHEET_NAME = "Candidates"
-
-# --- Sourcing & Scoring Configuration ---
-# The exact job title you want to search for on LinkedIn
-SEARCH_JOB_TITLE = "Senior C++ Developer"
-# The location to filter by. Be specific (e.g., "Germany", "San Francisco Bay Area")
-SEARCH_LOCATION = "Norway"
-# The maximum number of candidate URLs to collect from the search.
-MAX_CANDIDATES_TO_FIND = 25
-
-# The full job description (used for scoring)
-JOB_DESCRIPTION = """
-Position: Senior C++ Developer
-
-About the Company:
-Kratos is the leading provider of satellite Control and Monitoring solutions, with 80% market share. Kratos is also a leading actor in modernizing SatCom ground infrastructure, by developing a new generation of software-defined Satellite Communication products based on Kratos OpenSpace® Platform. OpenSpace® utilize cutting-edge cloud technologies, optimized for  maximum flexibility and performance.
-Kratos Norway is the Center of Excellence for VSAT technology within the Kratos group and has 20 years of track record developing highly efficient and advanced solutions for the satellite ground segment.
-Kratos Norway is now looking for Software Developers to contribute to the development of the next generation of digital and virtualized satellite monitoring and communication products.
-
-Key Responsibilities:
-
-Development of software communication and monitoring products
-Design, architecture and documentation
-Collaboration with other Kratos teams (mainly in the US)
-Supporting other parts of the organization (sales, delivery, customer support)
-Support execution of agile and scrum processes
-
-Requirements:
-Higher technical education within software development, preferably a Master’s degree
-Significant and documented experience in software design and development
-Object-oriented programming background, preferably in C++
-Experience with distributed systems built on Docker and Kubernetes
-Experience with communication protocols such as TCP/IP, DVB, or 3GPP
-Experience with Scrum and agile development processes and tools
-Fluency in written and spoken English
-
-Qualifications:
-Result-oriented, methodical, and structured
-Strong team player with good communication skills
-What the Company Offers
-Work with state-of-the-art technology with cutting-edge products and advanced solutions for the satellite communication industry
-Open and informal organization
-An international and engaging work environment
-Flexible working hours
-Competitive terms, including health insurance, travel insurance and good pension schemes
-"""
-
-# Weights for the final Lead Score calculation. Adjust as needed.
-LEAD_SCORE_WEIGHTS = {
-    'relevance': 0.5,
-    'tenure': 0.3,
-    'activity': 0.2
-}
+from config import SEARCH_JOB_TITLE, MAX_CANDIDATES_TO_FIND, JOB_DESCRIPTION, LEAD_SCORE_WEIGHTS, REQUIRED_KEYWORDS
 
 # Session Management
 SESSION_FILE = "linkedin_session.json"
@@ -109,73 +49,103 @@ def login_to_linkedin(context: BrowserContext, page: Page):
         context.storage_state(path=SESSION_FILE)
         print(f"Session state saved to {SESSION_FILE}")
 
-def search_for_candidates(page: Page, job_title: str, location: str, max_candidates: int) -> list[str]:
-    """Searches LinkedIn for candidates, handles pagination, and returns a list of profile URLs."""
-    print(f"Starting search for '{job_title}' in '{location}'...")
-    
-    search_url = f"https://www.linkedin.com/search/results/people/?keywords={job_title.replace(' ', '%20')}&origin=GLOBAL_SEARCH_HEADER"
+def search_for_candidates(page: Page, job_title: str, max_candidates: int) -> list[str]:
+    """
+    Searches LinkedIn for candidates, validates them on the search page,
+    handles pagination, and returns a list of relevant profile URLs.
+    """
+    print(f"Starting search for '{job_title}'...")
+
+    encoded_job_title = quote(job_title)
+    search_url = f"https://www.linkedin.com/search/results/people/?keywords={encoded_job_title}&origin=GLOBAL_SEARCH_HEADER"
+    print(f"Constructed search URL: {search_url}")
     page.goto(search_url)
     human_like_delay()
 
-    try:
-        page.locator("button:has-text('Locations')").click()
-        human_like_delay(1, 2)
-        location_input = page.locator("input[placeholder='Add a location']")
-        location_input.fill(location)
-        human_like_delay(1, 2)
-        page.keyboard.press("Enter")
-        human_like_delay(2, 3)
-        page.locator("button:has-text('Show results')").first.click()
-        print(f"Applied location filter: {location}")
-    except Exception as e:
-        print(f"Could not apply location filter, proceeding without it. Error: {e}")
+    print("Extracting and validating candidate profile URLs...")
+    page.wait_for_selector("div.search-results-container", timeout=15000)
 
-    human_like_delay(3, 5)
+    candidate_urls = []
+    processed_items = set() # Keep track of items we've already processed
 
-    found_urls = set()
-    page_number = 1
-    
-    while len(found_urls) < max_candidates:
-        print(f"\n--- Scraping Search Results Page {page_number} ---")
+    while len(candidate_urls) < max_candidates:
+        # Find all list items that could be a search result
+        list_items = page.locator("div.search-results-container li")
         
-        for i in range(3):
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            human_like_delay(2, 4)
-        
-        links = page.locator(".reusable-search__result-container a.app-aware-link[href*='/in/']").all()
-        for link in links:
-            href = link.get_attribute('href')
-            clean_url = href.split('?')[0]
-            if '/in/' in clean_url:
-                found_urls.add(clean_url)
-        
-        print(f"Found {len(found_urls)} unique candidates so far...")
-
-        if len(found_urls) >= max_candidates:
-            print("Reached max candidates limit. Stopping search.")
+        if list_items.count() == 0:
+            print("No search result items found on the page.")
             break
 
-        try:
-            next_button = page.locator('button[aria-label="Next"]')
-            if next_button.is_disabled():
-                print("Next button is disabled. Reached the end of search results.")
-                break
+        all_items_processed = True
+        for i in range(list_items.count()):
+            item = list_items.nth(i)
             
-            print("Clicking 'Next' to go to the next page...")
-            next_button.click()
-            page_number += 1
-            human_like_delay(3, 6)
-        except Exception as e:
-            print(f"Could not find or click the 'Next' button. Ending search. Error: {e}")
+            # Create a unique identifier for the item to avoid reprocessing
+            item_html = item.inner_html()
+            if item_html in processed_items:
+                continue
+            
+            all_items_processed = False
+            processed_items.add(item_html)
+
+            # Extract the headline/role text from the search result item
+            primary_subtitle_locator = item.locator("div.entity-result__primary-subtitle")
+            headline = primary_subtitle_locator.inner_text().lower() if primary_subtitle_locator.count() > 0 else ""
+
+            # Check if all required keywords are in the headline
+            if all(keyword.lower() in headline for keyword in REQUIRED_KEYWORDS):
+                link_locator = item.locator("a[href*='/in/']").first
+                if link_locator.count() > 0:
+                    href = link_locator.get_attribute("href")
+                    if href:
+                        clean_url = href.split('?')[0]
+                        if clean_url not in candidate_urls:
+                            print(f"Found relevant candidate: {headline}")
+                            candidate_urls.append(clean_url)
+                            if len(candidate_urls) >= max_candidates:
+                                break
+            else:
+                # This is commented out to avoid cluttering the output
+                # print(f"Skipping candidate, headline does not match: {headline}")
+                pass
+
+        if len(candidate_urls) >= max_candidates:
             break
 
-    print(f"\nSearch complete. Collected {len(found_urls)} candidate URLs.")
-    return list(found_urls)[:max_candidates]
+        # If we've processed all items on the page, try to scroll or go to the next page
+        if all_items_processed:
+            print("All items on the current page have been processed.")
+        
+        # Scroll down to load more results
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        human_like_delay(2, 4)
+        
+        # Try to click the "Next" button if it exists and is enabled
+        next_button = page.locator("button:has-text('Next')")
+        if next_button.is_visible() and next_button.is_enabled():
+            print("Scrolling finished. Clicking 'Next' page button...")
+            next_button.click()
+            human_like_delay(3, 6)
+            processed_items.clear() # Clear processed items when moving to a new page
+        else:
+            # If there's no "Next" button, we assume we've reached the end
+            print("Reached the end of the search results.")
+            break
+            
+    if not candidate_urls:
+        print("\n--- COULD NOT FIND ANY RELEVANT PROFILE LINKS ---")
+        print("The script could not find any candidates matching the required keywords.")
+        print("This might be due to a change in LinkedIn's page structure or no matching profiles.")
+        return []
+
+    print(f"Successfully extracted {len(candidate_urls)} unique and relevant candidate URLs.")
+    return candidate_urls[:max_candidates]
+
 
 def scrape_linkedin_profile(page: Page, profile_url: str) -> dict:
     """Scrapes the essential information from a LinkedIn profile."""
     print(f"Scraping profile: {profile_url}")
-    page.goto(profile_url, wait_until="domcontentloaded")
+    page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
     human_like_delay(3, 6)
 
     try:
@@ -230,6 +200,8 @@ def calculate_lead_score(scores: dict) -> float:
 
 def run_agent():
     """Main function to run the recruitment agent."""
+    all_candidates_data = [] # To store data for CSV export
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False, slow_mo=50)
         
@@ -242,49 +214,73 @@ def run_agent():
 
         page = context.new_page()
 
-        page.goto("https://www.linkedin.com/feed/")
+        page.goto("https://www.linkedin.com/feed/", timeout=90000)
         if "login" in page.url or "checkpoint" in page.url:
             print("Session is invalid or expired. Logging in again.")
             login_to_linkedin(context, page)
         else:
             print("Session loaded successfully. Already logged in.")
 
-        candidate_urls = search_for_candidates(page, SEARCH_JOB_TITLE, SEARCH_LOCATION, MAX_CANDIDATES_TO_FIND)
+        candidate_urls = search_for_candidates(page, SEARCH_JOB_TITLE, MAX_CANDIDATES_TO_FIND)
         
         if not candidate_urls:
             print("No candidates found. Exiting.")
-            browser.close()
             return
 
         for i, url in enumerate(candidate_urls):
             print(f"\n--- Processing Candidate {i+1}/{len(candidate_urls)}: {url} ---")
             
-            scraped_data = scrape_linkedin_profile(page, url)
-            if not scraped_data:
+            try:
+                scraped_data = scrape_linkedin_profile(page, url)
+                if not scraped_data:
+                    continue
+
+                llm_insights = llm_handler.generate_candidate_insights(scraped_data, JOB_DESCRIPTION)
+                if not llm_insights:
+                    continue
+                
+                lead_score = calculate_lead_score(llm_insights)
+                llm_insights["Lead Score"] = lead_score
+                print(f"Calculated final Lead Score: {lead_score}")
+
+                final_candidate_record = {**scraped_data, **llm_insights}
+                del final_candidate_record['summary'] 
+                del final_candidate_record['full_text']
+                
+                # --- Store data for CSV export ---
+                all_candidates_data.append(final_candidate_record)
+                
+                # --- The original Google Sheets logic is preserved below ---
+                # google_sheets_handler.add_candidate_to_sheet(
+                #     sheet_id=SHEET_ID,
+                #     worksheet_name=WORKSHEET_NAME,
+                #     candidate_data=final_candidate_record
+                # )
+                
+                human_like_delay(5, 10)
+            except Exception as e:
+                print(f"An error occurred while processing {url}. Skipping.")
+                print(f"Error: {e}")
                 continue
 
-            llm_insights = llm_handler.generate_candidate_insights(scraped_data, JOB_DESCRIPTION)
-            if not llm_insights:
-                continue
+    # --- Write all collected data to a CSV file ---
+    if all_candidates_data:
+        output_filename = "recruited_candidates.csv"
+        print(f"\nWriting {len(all_candidates_data)} candidates to {output_filename}...")
+        
+        # Get the headers from the first record
+        headers = all_candidates_data[0].keys()
+        
+        with open(output_filename, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(all_candidates_data)
             
-            lead_score = calculate_lead_score(llm_insights)
-            llm_insights["Lead Score"] = lead_score
-            print(f"Calculated final Lead Score: {lead_score}")
+        print(f"Successfully saved candidates to {output_filename}")
+    else:
+        print("\nNo candidate data was collected to write to CSV.")
 
-            final_candidate_record = {**scraped_data, **llm_insights}
-            del final_candidate_record['summary'] 
-            del final_candidate_record['full_text']
-            
-            google_sheets_handler.add_candidate_to_sheet(
-                sheet_id=SHEET_ID,
-                worksheet_name=WORKSHEET_NAME,
-                candidate_data=final_candidate_record
-            )
-            
-            human_like_delay(5, 10)
-
-        print("\n--- Agent has finished processing all candidates. ---")
-        browser.close()
+    print("\n--- Agent has finished processing all candidates. ---")
 
 if __name__ == "__main__":
     run_agent()

@@ -2,7 +2,7 @@ import ollama
 import json
 
 # --- Configuration ---
-# This is the default model we'll use. It assumes you have run 'ollama pull llama3.2'
+# This is the default model we'll use and runs in the local environment
 MODEL_NAME = 'llama3.2'
 # This is the default local endpoint for Ollama.
 OLLAMA_ENDPOINT = 'http://localhost:11434'
@@ -11,7 +11,7 @@ def get_llm_client():
     """Initializes and returns an Ollama client."""
     try:
         client = ollama.Client(host=OLLAMA_ENDPOINT)
-        # A quick check to see if the server is responsive
+        # check to see if the server is responsive
         client.list() 
         return client
     except Exception as e:

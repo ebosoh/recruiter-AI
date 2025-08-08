@@ -5,3 +5,4 @@ pandas
 playwright
 python-dotenv
 ollama
+linkedin_scraper
