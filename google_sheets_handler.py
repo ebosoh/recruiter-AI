@@ -2,13 +2,13 @@ import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
 
-# Define the scope of access for the APIs
+# The Agent will need access to Google Drive and Google sheets in order to write the final candidates data to a Google Sheet file
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file"
 ]
 
-# Path to your service account key file
+# In order to use the Google Sheets API, you need to create a service account and download the credentials JSON file.
 SERVICE_ACCOUNT_FILE = 'credentials.json'
 
 def get_sheet_client():
@@ -37,7 +37,7 @@ def add_candidate_to_sheet(sheet_id, worksheet_name, candidate_data):
         spreadsheet = client.open_by_key(sheet_id)
         worksheet = spreadsheet.worksheet(worksheet_name)
 
-        # Convert the dictionary to a DataFrame, then to a list of lists
+        # Converts the dictionary to a DataFrame, then to a list of lists
         # This ensures the data is in the correct format for appending.
         df = pd.DataFrame([candidate_data])
         
@@ -70,7 +70,7 @@ if __name__ == '__main__':
     TEST_SHEET_ID = "YOUR_GOOGLE_SHEET_ID_HERE" # <-- IMPORTANT: REPLACE
     TEST_WORKSHEET_NAME = "Candidates"
 
-    # Example candidate data
+    # A sample use case for candidate data
     sample_candidate = {
         "LinkedIn": "https://linkedin.com/in/johndoe",
         "Current Role": "Software Engineer",

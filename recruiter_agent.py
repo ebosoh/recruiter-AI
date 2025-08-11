@@ -15,7 +15,7 @@ from config import SEARCH_JOB_TITLE, MAX_CANDIDATES_TO_FIND, JOB_DESCRIPTION, LE
 SESSION_FILE = "linkedin_session.json"
 
 def human_like_delay(min_seconds=2, max_seconds=5):
-    """Waits for a random duration to mimic human behavior."""
+    """THis FUnction Waits for a random duration to mimic human behavior which makes it difficult to be tracked."""
     time.sleep(random.uniform(min_seconds, max_seconds))
 
 def login_to_linkedin(context: BrowserContext, page: Page):

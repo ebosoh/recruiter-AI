@@ -2,7 +2,7 @@
 # The exact job title you want to search for on LinkedIn
 SEARCH_JOB_TITLE = 'Norway (C++)'
 # The maximum number of candidate URLs to collect from the search.
-MAX_CANDIDATES_TO_FIND = 1000
+MAX_CANDIDATES_TO_FIND = 25
 
 # The full job description (used for scoring)
 JOB_DESCRIPTION = """
@@ -49,5 +49,5 @@ LEAD_SCORE_WEIGHTS = {
 
 # Keywords that must be present in a candidate's "Current Role" to be considered.
 # The script checks if all keywords in this list are present in the role string.
-# The check is case-insensitive.
+# The check is case-insensitive.As expert recruiters, include the necessary keywords that are essential for the role.
 REQUIRED_KEYWORDS = []
